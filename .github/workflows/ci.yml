@@ -25,7 +25,7 @@ jobs:
       - run: corepack enable && corepack prepare pnpm@11.21.0 --activate
       - run: pnpm install --frozen-lockfile && pnpm lint && pnpm test && pnpm build
         working-directory: web
-      - run: bash deploy/deploy.sh --domain music.example.com --navidrome-domain navi.example.com --configure-only
+      - run: bash deploy/deploy.sh --domain music.example.com --navidrome-domain navi.example.com --no-https --configure-only
       - run: docker compose --env-file deploy/.env config --quiet
       - run: docker build -f server/Dockerfile -t bilimusicplayer-ci .
       - name: Container authentication smoke check
@@ -38,3 +38,15 @@ jobs:
           done
           curl -fsS http://127.0.0.1:18080/api/auth/status | python -c 'import json,sys; assert json.load(sys.stdin)["enabled"]'
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/songs)" = 401
+      - name: Fresh Compose install and upgrade
+        run: |
+          trap 'docker compose --env-file deploy/.env logs --tail 60; docker compose --env-file deploy/.env down' EXIT
+          bash deploy/deploy.sh
+          before=$(sha256sum deploy/.env)
+          printf 'keep-media' > data/music/keep.txt
+          bash deploy/deploy.sh
+          test "$before" = "$(sha256sum deploy/.env)"
+          test "$(cat data/music/keep.txt)" = keep-media
+          test -n "$(find data/backups -name 'pre-upgrade-*.db' -print)"
+      - name: Validate HTTPS proxy configuration
+        run: docker run --rm -e MUSIC_DOMAIN=music.example.com -e NAVIDROME_DOMAIN=navi.example.com -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
