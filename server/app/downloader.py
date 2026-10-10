@@ -19,11 +19,18 @@ from mutagen.mp4 import MP4, MP4Cover
 from PIL import Image, ImageOps
 
 from .media import atomic_media_copy, media_lock, normalize_m4a
-from . import bilibili
+from . import bilibili, cdn
 from .config import (BILI_HEADERS, COVER_DIR, COVER_MAX_SIZE, COVER_QUALITY,
                      MUSIC_DIR)
 
 logger = logging.getLogger(__name__)
+
+
+class _DashDownloadError(RuntimeError):
+    def __init__(self, expected_duration: float):
+        super().__init__("DASH CDN 地址均下载失败或音频不完整")
+        self.expected_duration = expected_duration
+
 
 def _safe(name: str, max_len: int = 80) -> str:
     name = re.sub(r'[\\/:*?"<>|\r\n\t]', " ", name)
@@ -92,6 +99,10 @@ def _download_audio(bvid, cookie_file, progress_hook, cid, part_index, tmp) -> d
             return _validate_download(result, expected_duration)
         except Exception as e:  # noqa: BLE001
             last_err = e
+            # Preserve the selected CID's duration even if every CDN candidate
+            # fails validation, so the webpage fallback cannot accept a shorter
+            # file based on its own incomplete duration metadata.
+            expected_duration = float(getattr(e, "expected_duration", 0) or expected_duration)
             if not _transient(e):
                 break  # 不是限流问题，直接走 yt-dlp 回退
             time.sleep(wait)
@@ -196,8 +207,8 @@ def _direct_dash(bvid: str, cookie: str | None, tmp: Path, cid: int | None = Non
     if not audios:
         raise RuntimeError("该视频没有 DASH 音频流")
     audio = max(audios, key=lambda a: a.get("id", 0))  # 30280 = 192k
-    url = audio.get("baseUrl") or audio.get("base_url") or (audio.get("backupUrl") or [None])[0]
-    if not url:
+    urls = cdn.audio_urls(audio)
+    if not urls:
         raise RuntimeError("音频地址为空")
 
     ydl_opts = {
@@ -205,23 +216,45 @@ def _direct_dash(bvid: str, cookie: str | None, tmp: Path, cid: int | None = Non
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
-        "retries": 10,
-        "fragment_retries": 10,
-        "socket_timeout": 30,
+        "retries": 2,
+        "fragment_retries": 2,
+        "socket_timeout": 15,
+        "logger": cdn.SafeDownloadLogger(),
         "continuedl": True,
         "http_headers": {
             "User-Agent": BILI_HEADERS["User-Agent"],
             "Referer": "https://www.bilibili.com/",
         },
     }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        path = Path(ydl.prepare_filename(info))
-        if not path.exists():
-            candidates = [p for p in tmp.glob(f"{bvid}*") if p.suffix in (".m4a", ".m4s", ".mp3", ".webm")]
-            if not candidates:
-                raise RuntimeError("未找到下载的音频文件")
-            path = candidates[0]
+    path = None
+    for index, url in enumerate(cdn.ordered_urls(urls)):
+        # Different endpoints must never resume a partial file from one another.
+        endpoint_tmp = tmp / f"cdn-{index}"
+        endpoint_tmp.mkdir()
+        opts = {**ydl_opts, "outtmpl": str(endpoint_tmp / f"{bvid}.%(ext)s")}
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                candidate = Path(ydl.prepare_filename(info))
+                if not candidate.exists():
+                    candidates = [p for p in endpoint_tmp.glob(f"{bvid}*")
+                                  if p.suffix in (".m4a", ".m4s", ".mp3", ".webm")]
+                    if not candidates:
+                        raise RuntimeError("未找到下载的音频文件")
+                    candidate = candidates[0]
+            # With backup endpoints, an incomplete download must try another
+            # CDN before falling back to the blocked video webpage. The outer
+            # download pipeline also validates the accepted result, including
+            # streams with just one address.
+            if len(urls) > 1:
+                _validate_download({"file": candidate}, float(dur or 0))
+            path = candidate
+            break
+        except Exception:
+            cdn.failed(url)
+            logger.warning("DASH CDN 候选 %d 下载或完整性校验失败，尝试备用地址", index + 1)
+    if path is None:
+        raise _DashDownloadError(float(dur or 0))
 
     cover = None
     pic = detail.get("pic")
