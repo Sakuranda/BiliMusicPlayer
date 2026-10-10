@@ -208,6 +208,22 @@ class LyricsRetryTests(unittest.TestCase):
         self.assertFalse(importer.is_song_active(1))
         self.assertNotIn(1, lyrics_retry._queued)
 
+    def test_private_deployment_exclusive_lease_prevents_queue_mutation(self):
+        import fcntl
+        try:
+            from app import maintenance
+        except ImportError:
+            self.skipTest('Public edition has no private maintenance lease module')
+        with patch.object(maintenance, 'DATA_DIR', Path(self.temp.name)), \
+                patch.object(lyrics_retry, 'maintenance_lease', maintenance.lease), \
+                (Path(self.temp.name) / '.maintenance-lock').open('a') as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaises(maintenance.MaintenanceError):
+                lyrics_retry.retry_song(1)
+        self.assertFalse(importer.is_song_active(1))
+        self.assertNotIn(1, lyrics_retry._queued)
+        self.assertEqual(self.state()['status'], 'error')
+
     def test_submit_failure_releases_lease_and_song_with_persistent_due_time(self):
         with patch.object(lyrics_retry._executor, 'submit', side_effect=RuntimeError('executor unavailable')), \
                 patch.object(lyrics_retry.time, 'time', return_value=2000):
