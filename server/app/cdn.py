@@ -76,10 +76,14 @@ def _probe(url: str) -> float:
         return 0.0
 
 
-def ordered_urls(urls: list[str]) -> list[str]:
-    hosts = tuple(sorted({urlsplit(url).hostname for url in urls}))
+def ordered_urls(urls: list[str], primary: str | None = None) -> list[str]:
+    # Backup endpoints are the default; the primary is strictly a last resort.
+    # Pass the primary explicitly: backup-only responses have no primary URL.
+    backups = [url for url in urls if url != primary]
+    fallback = [primary] if primary in urls else []
+    hosts = tuple(sorted({urlsplit(url).hostname for url in backups}))
     if len(hosts) < 2:
-        return urls
+        return backups + fallback
     # Serialize cold probes so concurrent songs do not sample the same hosts.
     with _lock:
         now = time.monotonic()
@@ -89,7 +93,7 @@ def ordered_urls(urls: list[str]) -> list[str]:
             scores = cached[1]
         else:
             scores = {}
-            for url in urls:
+            for url in backups:
                 host = urlsplit(url).hostname
                 if host not in scores and len(scores) < 3:
                     scores[host] = _probe(url)
@@ -97,7 +101,7 @@ def ordered_urls(urls: list[str]) -> list[str]:
             _scores.move_to_end(hosts)
             while len(_scores) > 32:
                 _scores.popitem(last=False)
-        return sorted(urls, key=lambda url: scores.get(urlsplit(url).hostname, 0), reverse=True)
+        return sorted(backups, key=lambda url: scores.get(urlsplit(url).hostname, 0), reverse=True) + fallback
 
 
 def failed(url: str) -> None:

@@ -17,6 +17,24 @@ class CDNSelectionTests(unittest.TestCase):
         }), self.urls)
         self.assertEqual(cdn.audio_urls({"backupUrl": self.urls[1]}), [self.urls[1]])
 
+    def test_single_backup_is_first_and_primary_is_not_probed(self):
+        with patch.object(cdn, "_probe") as probe:
+            self.assertEqual(cdn.ordered_urls(self.urls, primary=self.urls[0]), self.urls[::-1])
+            self.assertEqual(cdn.ordered_urls([self.urls[0]], primary=self.urls[0]), [self.urls[0]])
+        probe.assert_not_called()
+
+    def test_multiple_backups_are_ranked_but_primary_can_never_overtake_them(self):
+        third = "https://third.example/audio?signature=other"
+        with patch.object(cdn, "_probe", side_effect=[100, 1600]) as probe:
+            self.assertEqual(cdn.ordered_urls([self.urls[0], self.urls[1], third], primary=self.urls[0]),
+                             [third, self.urls[1], self.urls[0]])
+        self.assertEqual([call.args[0] for call in probe.call_args_list], [self.urls[1], third])
+
+    def test_backup_only_response_does_not_demote_first_backup_as_a_primary(self):
+        backups = cdn.audio_urls({"backupUrl": self.urls})
+        with patch.object(cdn, "_probe", side_effect=[1600, 100]):
+            self.assertEqual(cdn.ordered_urls(backups, primary=None), self.urls)
+
     def test_fastest_host_cached_across_new_signed_urls_then_reprobed_after_expiry(self):
         with patch.object(cdn, "_probe", side_effect=[100, 1600, 2000, 500]) as probe:
             self.assertEqual(cdn.ordered_urls(self.urls), self.urls[::-1])
@@ -157,7 +175,6 @@ class CDNDownloadFallbackTests(unittest.TestCase):
             tempfile.TemporaryDirectory() as directory,
             patch.object(downloader.bilibili, "fetch_detail", side_effect=RuntimeError("HTTP 412")),
             patch.object(downloader.bilibili, "fetch_playurl", return_value=play),
-            patch.object(cdn, "ordered_urls", side_effect=lambda candidates: candidates),
             patch.object(cdn, "failed") as failed,
             patch.object(downloader, "_validate_download", side_effect=validate),
             patch("yt_dlp.YoutubeDL", FakeYDL),
@@ -165,9 +182,9 @@ class CDNDownloadFallbackTests(unittest.TestCase):
         ):
             result = downloader._direct_dash("BVTEST", None, Path(directory), cid=7)
             self.assertEqual(result["file"].read_bytes(), b"complete")
-            self.assertEqual([url for url, _ in attempts], urls)
+            self.assertEqual([url for url, _ in attempts], urls[::-1])
             self.assertNotEqual(attempts[0][1].parent, attempts[1][1].parent)
-            failed.assert_called_once_with(urls[0])
+            failed.assert_called_once_with(urls[1])
             self.assertNotIn("secret", " ".join(logs.output))
 
 

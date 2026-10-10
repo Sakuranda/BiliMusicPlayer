@@ -227,7 +227,7 @@ def _direct_dash(bvid: str, cookie: str | None, tmp: Path, cid: int | None = Non
         },
     }
     path = None
-    for index, url in enumerate(cdn.ordered_urls(urls)):
+    for index, url in enumerate(cdn.ordered_urls(urls, primary=audio.get("baseUrl") or audio.get("base_url"))):
         # Different endpoints must never resume a partial file from one another.
         endpoint_tmp = tmp / f"cdn-{index}"
         endpoint_tmp.mkdir()
