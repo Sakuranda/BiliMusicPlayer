@@ -1,0 +1,6 @@
+{
+  "name": "最早添加 · 老歌在前",
+  "comment": "按服务器首次入库时间从旧到新排列；在 Amperfy 在线打开歌单并下拉刷新。",
+  "all": [{ "is": { "missing": false } }],
+  "sort": "dateadded,title"
+}

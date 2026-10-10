@@ -1,0 +1,150 @@
+@import "tailwindcss";
+
+@theme {
+  /* Midnight listening room: cool surfaces, quiet lavender highlights. */
+  --color-bg: #111827;
+  --color-bg2: #151e30;
+  --color-panel: #1b263b;
+  --color-panel2: #25324a;
+  --color-line: #33415a;
+  --color-ink: #f1f4fc;
+  --color-muted: #b3bfd3;
+  --color-faint: #8c9db7;
+  --color-accent: #b6a5ff;
+  --color-accent-soft: #cebdff;
+  --color-accent-dim: rgba(182, 165, 255, 0.12);
+  --color-primary: #7355cc;
+  --color-danger: #ff938d;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC",
+    sans-serif;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+/* 细腻滚动条 */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: #33415a; border-radius: 8px; }
+*::-webkit-scrollbar-thumb:hover { background: #465773; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* 进度条滑块 */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 4px;
+  background: var(--range-bg, #33415a);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  margin-top: -4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+input[type="range"]:hover::-webkit-slider-thumb { opacity: 1; }
+
+/* 卡片悬浮动画 */
+.hover-lift {
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.hover-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+/* 淡入 */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in-up { animation: fadeInUp 0.35s ease both; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 1s linear infinite; }
+
+/* 唱片旋转 */
+@keyframes spinSlow { to { transform: rotate(360deg); } }
+.spin-slow { animation: spinSlow 14s linear infinite; }
+.spin-slow-paused { animation-play-state: paused; }
+
+/* 歌词高亮 */
+.lyric-line {
+  transition: color 0.3s ease, transform 0.3s ease, opacity 0.3s ease;
+}
+
+/* 大收藏夹预览时跳过屏幕外卡片的布局与绘制。 */
+.song-preview-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
+}
+
+/* 大曲库只布局和绘制视口附近的歌曲。两种视图保留各自的占位高度。 */
+.library-song-list {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
+}
+.library-song-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 320px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-in-up,
+  .spin,
+  .spin-slow {
+    animation: none;
+  }
+  .hover-lift:hover {
+    transform: none;
+  }
+}
+
+/* Display type echoes the rounded waveform monogram; UI stays native on iOS. */
+h1, .brand-name { font-family: "Avenir Next", "SF Pro Display", "PingFang SC", sans-serif; }
+button, a, input, select { -webkit-tap-highlight-color: transparent; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+::selection { background: var(--color-accent); color: var(--color-bg); }
+.library-heading { border-bottom: 1px solid var(--color-line); padding-bottom: 28px; }
+.library-toolbar { padding: 18px 0 24px; }
+.player-dock { padding-bottom: env(safe-area-inset-bottom, 0px); }
+.player-full { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+.now-artwork { box-shadow: 0 20px 70px #080c1880; }
+input[type="range"] { min-height: 28px; touch-action: pan-y; }
+input[type="range"]::-moz-range-track { height: 4px; border-radius: 4px; background: var(--range-bg, var(--color-line)); }
+input[type="range"]::-moz-range-thumb { border: 0; width: 12px; height: 12px; border-radius: 50%; background: var(--color-accent); }
+@media (pointer: coarse) {
+  input[type="range"]::-webkit-slider-thumb { opacity: 1; }
+}
+@media (max-width: 767px) {
+  input:not([type="range"]), select { font-size: 16px; }
+  .library-song-card { contain-intrinsic-size: auto 260px; }
+  .player-full { height: 100dvh; }
+  .app-navigation { padding-top: env(safe-area-inset-top, 0px); height: calc(4rem + env(safe-area-inset-top, 0px)); }
+  .app-content { padding-top: calc(4rem + env(safe-area-inset-top, 0px)); padding-bottom: calc(7rem + env(safe-area-inset-bottom, 0px)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0s !important; }
+}

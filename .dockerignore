@@ -1,0 +1,16 @@
+.git
+.github
+.dsh
+**/node_modules
+**/.venv
+**/__pycache__
+**/dist
+**/.env
+**/*.local
+data
+backups
+release-dist
+docs
+**/*.m4a
+**/*.mp3
+**/*.flac

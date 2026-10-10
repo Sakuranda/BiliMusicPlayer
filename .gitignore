@@ -1,0 +1,32 @@
+# Node
+node_modules/
+dist/
+.pnpm-store/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 环境变量与密钥
+.env
+deploy/.env
+*.local
+
+# 音频与数据（不入库）
+music/
+data/
+/backups/
+*.m4a
+*.mp3
+*.flac
+
+# 系统
+.DS_Store
+Thumbs.db
+
+/release-dist/
+*.db
+*.db-*
+*.bak

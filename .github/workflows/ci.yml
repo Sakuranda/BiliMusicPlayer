@@ -1,0 +1,40 @@
+name: Checks
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: pip install -r server/requirements.txt
+      - run: python -m unittest discover -s tests
+        working-directory: server
+      - run: python -m unittest discover -s deploy/tests
+      - run: corepack enable && corepack prepare pnpm@11.21.0 --activate
+      - run: pnpm install --frozen-lockfile && pnpm lint && pnpm test && pnpm build
+        working-directory: web
+      - run: bash deploy/deploy.sh --domain music.example.com --navidrome-domain navi.example.com --configure-only
+      - run: docker compose --env-file deploy/.env config --quiet
+      - run: docker build -f server/Dockerfile -t bilimusicplayer-ci .
+      - name: Container authentication smoke check
+        run: |
+          docker run -d --name bilimusicplayer-check --env-file deploy/.env -p 127.0.0.1:18080:8080 bilimusicplayer-ci
+          trap 'docker logs bilimusicplayer-check; docker rm -f bilimusicplayer-check' EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/api/health; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:18080/api/auth/status | python -c 'import json,sys; assert json.load(sys.stdin)["enabled"]'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/songs)" = 401

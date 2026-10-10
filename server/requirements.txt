@@ -1,0 +1,9 @@
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+httpx==0.28.*
+yt-dlp>=2025.1.15
+mutagen==1.47.*
+pydantic==2.*
+python-multipart==0.0.*
+Pillow==11.*
+qrcode==8.2
