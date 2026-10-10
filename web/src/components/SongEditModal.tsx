@@ -32,6 +32,7 @@ export default function SongEditModal({
   }
   const [lyricsSource, setLyricsSource] = useState(song.lyrics_source)
   const [lyricsBusy, setLyricsBusy] = useState(false)
+  const [lyricsMessage, setLyricsMessage] = useState('')
   const busy = saving || lyricsBusy || coverBusy
   const lyricInputRef = useRef<HTMLInputElement>(null)
 
@@ -192,6 +193,14 @@ export default function SongEditModal({
               </button>
             )}
           </div>
+          <button disabled={busy || lyricsSource === 'upload'} onClick={async () => {
+            setLyricsBusy(true); setError(''); setLyricsMessage('')
+            try { const result = await api.refreshLyrics(song.id); setLyricsSource(result.song.lyrics_source); onSaved(result.song); setLyricsMessage(result.message) }
+            catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+            finally { setLyricsBusy(false) }
+          }} className="mt-2 inline-flex min-h-11 items-center gap-2 text-xs text-accent disabled:opacity-50"><RefreshCw size={14} className={lyricsBusy ? 'spin' : ''} />重新匹配歌词</button>
+          {lyricsMessage && <p role="status" className="text-xs text-muted">{lyricsMessage}</p>}
+          <p className="text-[10px] text-faint mt-2.5">先保存歌名和歌手的修改，再重新匹配。手动上传的歌词会保留。</p>
           <p className="text-[10px] text-faint mt-2.5">支持 .lrc 时间轴歌词和 .txt 纯文本，最大 1 MB</p>
         </div>
 

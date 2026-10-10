@@ -139,3 +139,16 @@ export interface AccessAudit {
   latest_access: string | null
   entries: AccessEntry[]
 }
+
+export interface LyricsFailure {
+  song_id: number
+  title: string
+  artist: string
+  error: string
+  first_failed_at: string
+  last_attempt_at: string
+  next_retry_at: string | null
+  status: 'error' | 'queued' | 'downloading' | 'ready'
+  attempts: number
+  dismissed: boolean
+}

@@ -9,7 +9,7 @@ from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import bilibili, downloader, lyrics, parser
+from . import bilibili, downloader, lyrics, parser, lyrics_retry
 from .config import COOKIE_DIR, DOWNLOAD_THREADS, METADATA_THREADS, MUSIC_DIR
 from .db import (add_job_song, create_job, get_collection, get_conn, get_job,
                  get_song_by_bvid, get_song, insert_song, list_collections, list_job_songs,
@@ -392,15 +392,21 @@ def _download_one(conn, song: dict, cookie_file: Path | None):
         lrc_text = song.get("lrc") or ""
         lyric_source = song.get("lyrics_source") or ""
         if song.get("lyrics_enabled", True) and lyric_source != "upload":
+            lyrics_retry.record_started(conn, sid)
             try:
                 hit = lyrics.fetch_lyrics(song["title"], song["artist"], song["duration"] or 0)
-                lyric_plain = hit["plain"]
-                lrc_text = hit["lrc"]
-                lyric_source = hit["source"]
-                update_song(conn, sid, lyrics=lyric_plain, lrc=lrc_text,
-                            lyrics_source=lyric_source)
+                if hit.get("plain") or hit.get("lrc"):
+                    lyric_plain = hit["plain"]
+                    lrc_text = hit["lrc"]
+                    lyric_source = hit["source"]
+                    update_song(conn, sid, lyrics=lyric_plain, lrc=lrc_text,
+                                lyrics_source=lyric_source)
+                    lyrics_retry.record_success(conn, sid)
+                elif not (lyric_plain or lrc_text):
+                    lyrics_retry.record_failure(conn, sid, "暂未找到可用歌词，将每五分钟自动重试")
             except Exception:
-                pass
+                if not (lyric_plain or lrc_text):
+                    lyrics_retry.record_failure(conn, sid, "歌词服务请求失败，将每五分钟自动重试")
 
         result = downloader.download_audio(
             song["bvid"], cookie_file,
@@ -408,6 +414,11 @@ def _download_one(conn, song: dict, cookie_file: Path | None):
             part_index=song.get("part_index") or 1,
         )
         cover_bytes = downloader.optimize_cover(result["cover"])
+        if not cover_bytes and str(song.get("cover_url") or "").startswith(("http://", "https://", "//")):
+            try:
+                cover_bytes = downloader.fetch_cover(song["bvid"], cover_url=song["cover_url"])
+            except Exception:
+                logger.warning("收藏夹封面下载暂时失败 sid=%s", sid)
         rel = downloader.tag_and_store(
             result["file"], song["title"], song["artist"], song["album"],
             cover_bytes, f"{song['bvid']}-{song.get('cid') or song['id']}", lrc_text or lyric_plain or None,

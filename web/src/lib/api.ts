@@ -129,6 +129,10 @@ export const api = {
   selectCollectionParts: (id: number, songIds: number[], bvids: string[]) =>
     req<CollectionRefreshResult>(`/api/collections/${id}/parts`, { method: 'POST', body: JSON.stringify({ song_ids: songIds, bvids }) }),
   syncArtists: () => req<{ artists: number }>('/api/artists/sync', { method: 'POST' }),
+  lyricsFailures: () => req<import('../types').LyricsFailure[]>('/api/lyrics-failures'),
+  retryLyrics: (id: number) => req<{ started: boolean; queued: number; message: string }>(`/api/songs/${id}/lyrics/retry`, { method: 'POST' }),
+  dismissLyricsFailure: (id: number) => req<{ ok: boolean }>(`/api/songs/${id}/lyrics/failure/dismiss`, { method: 'POST' }),
+  refreshLyrics: (id: number) => req<{ matched: boolean; message: string; song: Song }>(`/api/songs/${id}/lyrics/refresh`, { method: 'POST' }),
   refreshCover: (id: number) => req<Song>(`/api/songs/${id}/cover/refresh`, { method: 'POST' }),
   songs: () => req<Song[]>('/api/songs'),
   analyzeSong: (id: number) => req<MetadataSuggestion>(`/api/songs/${id}/analyze?refresh=true`, { method: 'POST' }),

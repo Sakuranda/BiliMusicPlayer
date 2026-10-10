@@ -3,6 +3,7 @@
 流程：yt-dlp 抽取原始 AAC/M4A（不重新编码）→ 嵌入元数据/压缩封面/歌词 → 曲库。
 数据中心 IP 易触发 B 站 412，策略：注入真实 buvid 指纹 Cookie + 自动重试。
 """
+import hashlib
 import io
 import logging
 import math
@@ -11,6 +12,7 @@ import re
 import shutil
 import tempfile
 import time
+import threading
 from pathlib import Path
 
 import httpx
@@ -24,6 +26,7 @@ from .config import (BILI_HEADERS, COVER_DIR, COVER_MAX_SIZE, COVER_QUALITY,
                      MUSIC_DIR)
 
 logger = logging.getLogger(__name__)
+_COVER_FETCH_SLOTS = threading.BoundedSemaphore(4)
 
 
 class _DashDownloadError(RuntimeError):
@@ -426,7 +429,8 @@ def optimize_cover(cover_bytes: bytes | None) -> bytes | None:
             image.thumbnail((COVER_MAX_SIZE, COVER_MAX_SIZE), Image.Resampling.LANCZOS)
             buf = io.BytesIO()
             image.save(buf, format="JPEG", quality=COVER_QUALITY, optimize=True, progressive=True)
-            return buf.getvalue()
+            optimized = buf.getvalue()
+            return optimized if len(optimized) <= 1024 * 1024 else None
     except (OSError, ValueError):
         return None
 
@@ -494,7 +498,7 @@ def update_audio_metadata(path: Path, title: str | None = None,
 
 def save_cover(cover_bytes: bytes, bvid: str) -> str | None:
     """缓存封面文件，返回文件名。"""
-    if not cover_bytes:
+    if not cover_bytes or len(cover_bytes) > 1024 * 1024:
         return None
     name = f"{bvid}.jpg"
     try:
@@ -516,7 +520,9 @@ def fetch_cover(bvid: str, cookie: str | None = None, cover_url: str | None = No
     parsed = urlparse(url)
     if parsed.scheme not in ("https", "http") or not (parsed.hostname or "").endswith(".hdslb.com"):
         raise ValueError("B站返回的封面地址无效")
-    with httpx.Client(headers=BILI_HEADERS, timeout=15) as client:
+    # Favorites often return HTTP URLs; always fetch covers over HTTPS locally.
+    url = parsed._replace(scheme="https").geturl()
+    with httpx.Client(headers=BILI_HEADERS, timeout=15, follow_redirects=False) as client:
         with client.stream("GET", url) as response:
             response.raise_for_status()
             data = bytearray()
@@ -537,3 +543,24 @@ def update_embedded_cover(path: Path, cover: bytes) -> None:
             audio.add_tags()
         audio.tags["covr"] = [MP4Cover(cover, imageformat=MP4Cover.FORMAT_JPEG)]
         audio.save()
+
+
+def cached_remote_cover(bvid: str, cover_url: str) -> Path:
+    """Serve legacy remote covers locally, with bounded fetches and no DB writes."""
+    digest = hashlib.sha256(cover_url.encode()).hexdigest()
+    path = COVER_DIR / f"remote-{digest}.jpg"
+    if path.is_file():
+        return path
+    with media_lock(path):
+        if path.is_file():
+            return path
+        if not _COVER_FETCH_SLOTS.acquire(timeout=3):
+            raise RuntimeError("封面下载繁忙，请稍后重试")
+        try:
+            image = fetch_cover(bvid, cover_url=cover_url)
+            name = save_cover(image, f"remote-{digest}")
+            if not name:
+                raise OSError("封面缓存保存失败")
+        finally:
+            _COVER_FETCH_SLOTS.release()
+    return path

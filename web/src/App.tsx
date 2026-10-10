@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, getToken, setToken } from './lib/api'
 import { PlayerProvider } from './hooks/usePlayer'
 import Sidebar from './components/Sidebar'
+import LyricsFailures from './components/LyricsFailures'
 import LibraryView from './components/LibraryView'
 import ImportView from './components/ImportView'
 import SettingsView from './components/SettingsView'
@@ -67,6 +68,7 @@ export default function App() {
       <div className="flex h-full flex-col md:flex-row">
         <Sidebar view={view} setView={setView} serverOk={serverOk} />
         <main className="app-content flex-1 min-w-0 overflow-y-auto pt-16 pb-28 md:pt-0">
+          <LyricsFailures onChanged={() => setRefreshKey(key => key + 1)} />
           {loadError && <div role="alert" className="mx-4 mt-4 rounded-xl border border-danger/30 bg-panel p-3 text-sm text-danger">
             {loadError}<button className="ml-3 underline" onClick={() => setRefreshKey((key) => key + 1)}>重试</button>
           </div>}

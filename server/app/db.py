@@ -69,6 +69,18 @@ CREATE TABLE IF NOT EXISTS songs (
     UNIQUE (bvid, part_index)
 );
 
+CREATE TABLE IF NOT EXISTS lyrics_failures (
+    song_id INTEGER PRIMARY KEY REFERENCES songs(id) ON DELETE CASCADE,
+    first_failed_at REAL NOT NULL,
+    last_attempt_at REAL NOT NULL,
+    next_retry_at REAL,
+    last_error TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 1,
+    dismissed INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'error'
+);
+CREATE INDEX IF NOT EXISTS idx_lyrics_failures_retry ON lyrics_failures(status,next_retry_at);
+
 CREATE TABLE IF NOT EXISTS playlists (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT UNIQUE NOT NULL,

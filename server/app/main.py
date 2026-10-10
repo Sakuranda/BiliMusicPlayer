@@ -23,7 +23,7 @@ from .db import (access_audit, add_access_session, add_song_to_playlist,
                  list_collections, list_jobs, list_playlist_songs, list_playlists, list_songs,
                  now, reconcile_downloaded_files, recover_interrupted_downloads, remove_song_from_playlist,
                  rename_playlist, touch_access_session, update_collection, update_song)
-from . import auth as auth_service, admin, bilibili, downloader, lyrics, parser
+from . import auth as auth_service, admin, bilibili, downloader, lyrics, lyrics_retry, parser
 from .importer import (ImportError, is_job_active, is_song_active,
                        materialize_cached_parts, parse_and_store, refresh_collection, reserve_song_edit,
                        start_collection_scheduler, start_download,
@@ -38,6 +38,7 @@ async def lifespan(_app: FastAPI):
     try:
         recovered_songs, recovered_jobs = recover_interrupted_downloads(conn)
         repaired_files = reconcile_downloaded_files(conn)
+        lyrics_retry.reconcile(conn)
         materialize_cached_parts(conn)
         if recovered_songs or recovered_jobs:
             logging.getLogger("uvicorn.error").warning(
@@ -51,9 +52,11 @@ async def lifespan(_app: FastAPI):
         conn.close()
     sync_artist_playlists_safely()
     start_collection_scheduler()
+    lyrics_retry.start_scheduler()
     try:
         yield
     finally:
+        lyrics_retry.stop_scheduler()
         stop_collection_scheduler()
 
 
@@ -539,6 +542,39 @@ def song_analyze(sid: int, refresh: bool = False):
         return {**result, "warnings": warnings}
 
 
+@app.get("/api/lyrics-failures")
+def lyric_failure_notices():
+    return lyrics_retry.list_failures()
+
+
+@app.post("/api/songs/{sid}/lyrics/retry")
+def retry_song_lyrics(sid: int):
+    try:
+        return lyrics_retry.retry_song(sid)
+    except ImportError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/songs/{sid}/lyrics/failure/dismiss")
+def dismiss_lyric_failure(sid: int):
+    return lyrics_retry.dismiss(sid)
+
+
+@app.post("/api/songs/{sid}/lyrics/refresh")
+def refresh_song_lyrics(sid: int):
+    with _song_edit(sid), closing(get_conn()) as conn:
+        song = get_song(conn, sid)
+        if not song:
+            raise HTTPException(404, "歌曲不存在")
+        if song.get("lyrics_source") == "upload":
+            return {"matched": False, "message": "已保留手动上传的歌词", "song": song}
+        update_song(conn, sid, lyrics_enabled=1)
+        conn.execute("UPDATE lyrics_failures SET dismissed=0 WHERE song_id=?", (sid,))
+        conn.commit()
+        matched = lyrics_retry.refresh_once(conn, sid, force=True)
+        return {"matched": matched, "message": "歌词已更新" if matched else "暂未找到可用歌词，原歌词已保留，将每五分钟重试", "song": get_song(conn, sid)}
+
+
 @app.put("/api/songs/{sid}/lyrics")
 async def song_lyrics_upload(sid: int, file: UploadFile = File(...)):
     """上传 UTF-8/UTF-16/GB18030 的 .lrc 或 .txt 歌词。"""
@@ -568,6 +604,7 @@ async def song_lyrics_upload(sid: int, file: UploadFile = File(...)):
         if song.get("file_path"):
             downloader.write_lrc_sidecar(song["file_path"], text)
             downloader.update_embedded_lyrics(song["file_path"], text)
+        lyrics_retry.record_success(conn, sid)
         return get_song(conn, sid)
 
 
@@ -579,10 +616,11 @@ def song_lyrics_delete(sid: int):
         song = get_song(conn, sid)
         if not song:
             raise HTTPException(404, "歌曲不存在")
-        update_song(conn, sid, lyrics=None, lrc=None, lyrics_source=None)
+        update_song(conn, sid, lyrics=None, lrc=None, lyrics_source=None, lyrics_enabled=0)
         if song.get("file_path"):
             downloader.remove_lrc_sidecar(song["file_path"])
             downloader.update_embedded_lyrics(song["file_path"], None)
+        lyrics_retry.dismiss(sid)
         return get_song(conn, sid)
 
 
@@ -728,7 +766,7 @@ def refresh_song_cover(sid: int):
         name = None
         try:
             try:
-                cover_bytes = downloader.fetch_cover(song["bvid"], cookie)
+                cover_bytes = downloader.fetch_cover(song["bvid"], cookie, cover_url=song["cover_url"] if str(song.get("cover_url") or "").startswith(("http://", "https://", "//")) else None)
             except (BiliError, ValueError):
                 if not job or not job[0]:
                     raise
@@ -765,7 +803,11 @@ def cover(sid: int):
             if path.exists():
                 return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, no-cache"})
         if song.get("cover_url"):
-            return RedirectResponse(song["cover_url"])
+            try:
+                path = downloader.cached_remote_cover(song["bvid"], song["cover_url"])
+                return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, no-cache"})
+            except Exception:
+                raise HTTPException(503, "封面暂不可用，请稍后刷新", headers={"Retry-After": "3"}) from None
         raise HTTPException(404, "无封面")
 
 
