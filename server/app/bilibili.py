@@ -2,10 +2,12 @@
 
 公开收藏夹无需登录；私密收藏夹需携带 SESSDATA 等 Cookie。
 """
+import hashlib
 import re
 import threading
 import time
 from typing import Optional
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 
@@ -17,6 +19,15 @@ PAGES_API = "https://api.bilibili.com/x/player/pagelist"
 TAGS_API = "https://api.bilibili.com/x/tag/archive/tags"
 SPI_API = "https://api.bilibili.com/x/frontend/finger/spi"
 PLAYURL_API = "https://api.bilibili.com/x/player/playurl"
+WBI_PLAYURL_API = "https://api.bilibili.com/x/player/wbi/playurl"
+NAV_API = "https://api.bilibili.com/x/web-interface/nav"
+_WBI_KEY_TTL = 3600
+_WBI_FAILURE_COOLDOWN = 60
+_wbi_lock = threading.Lock()
+_wbi_cache = {"key": None, "expires": 0.0, "retry_at": 0.0}
+_WBI_MIXIN = [46,47,18,2,53,8,23,32,15,50,10,31,58,3,45,35,27,43,5,49,33,9,42,19,
+              29,28,14,39,12,38,41,13,37,48,7,16,24,55,40,61,26,17,0,1,60,51,30,4,22,
+              25,54,21,56,59,6,63,57,62,11,36,20,34,44,52]
 
 # 简单全局限速：避免持续高频请求触发 412 反爬
 _rate_lock = threading.Lock()
@@ -240,15 +251,80 @@ def fetch_detail(bvid: str, cookie: Optional[str] = None) -> dict:
         raise BiliError(str(original_error)) from original_error
 
 
-def fetch_playurl(bvid: str, cid: int, cookie: Optional[str] = None) -> dict:
-    """获取 DASH 播放地址（旧接口，无需 WBI 签名）。"""
+def _wbi_failed():
+    with _wbi_lock:
+        now = time.monotonic()
+        if now >= _wbi_cache['retry_at']:
+            _wbi_cache.update(key=None, expires=0.0, retry_at=now + _WBI_FAILURE_COOLDOWN)
+
+
+def _wbi_key(client: httpx.Client) -> str:
+    # The same public signing keys serve all cookies; do not cache credentials.
+    with _wbi_lock:
+        now = time.monotonic()
+        if now < _wbi_cache['retry_at']:
+            raise BiliError('WBI接口暂不可用，请稍后重试')
+        if _wbi_cache['key'] and now < _wbi_cache['expires']:
+            return _wbi_cache['key']
+        _throttle()
+        response = _response_json(client.get(NAV_API), '获取WBI签名信息')
+        # Anonymous nav normally reports code=-101 but still supplies wbi_img.
+        data = response.get('data')
+        images = data.get('wbi_img') if isinstance(data, dict) else None
+        if not isinstance(images, dict):
+            raise BiliError('B站未返回有效WBI签名信息，请稍后重试')
+        parts = []
+        for field in ('img_url', 'sub_url'):
+            url = images.get(field)
+            if not isinstance(url, str):
+                raise BiliError('B站未返回有效WBI签名信息，请稍后重试')
+            filename = urlsplit(url).path.rsplit('/', 1)[-1].split('.', 1)[0]
+            if not re.fullmatch(r'[0-9a-fA-F]{32}', filename):
+                raise BiliError('B站未返回有效WBI签名信息，请稍后重试')
+            parts.append(filename)
+        material = ''.join(parts)
+        key = ''.join(material[index] for index in _WBI_MIXIN)[:32]
+        _wbi_cache.update(key=key, expires=time.monotonic() + _WBI_KEY_TTL, retry_at=0.0)
+        return key
+
+
+def _sign_wbi(params: dict, key: str) -> dict:
+    # Matches yt-dlp's BilibiliBaseIE._sign_wbi; never log signed parameters.
+    values = {**params, 'wts': round(time.time())}
+    values = {name: ''.join(char for char in str(value) if char not in "!'()*")
+              for name, value in sorted(values.items())}
+    values['w_rid'] = hashlib.md5((urlencode(values) + key).encode()).hexdigest()
+    return values
+
+
+def _playurl_json(client: httpx.Client, endpoint: str, params: dict) -> dict:
     _throttle()
+    response = _response_json(client.get(endpoint, params=params), '获取音频播放地址')
+    code = response.get('code')
+    if code != 0 or not isinstance(response.get('data'), dict):
+        safe_code = code if isinstance(code, int) else '未知'
+        raise BiliError(f'获取音频播放地址失败（code={safe_code}），请稍后重试')
+    return response['data']
+
+
+def fetch_playurl(bvid: str, cid: int, cookie: Optional[str] = None) -> dict:
+    """Prefer the existing API; use signed WBI only after an actual failure.
+
+    Neither route needs view when CID is known. Every network request uses the
+    existing global throttle and client cookie/referer, with deterministic close.
+    """
+    params = {'bvid': bvid, 'cid': cid, 'fnval': 16, 'fourk': 1, 'platform': 'pc'}
     with _client(cookie) as client:
-        r = client.get(
-            PLAYURL_API,
-            params={"bvid": bvid, "cid": cid, "fnval": 16, "fourk": 1, "platform": "pc"},
-        )
-        data = _response_json(r, f"获取 {bvid} 播放地址")
-        if data.get("code") != 0:
-            raise BiliError(f"获取 {bvid} 播放地址失败: {data.get('message')} (code={data.get('code')})")
-        return data["data"]
+        try:
+            return _playurl_json(client, PLAYURL_API, params)
+        except (BiliError, httpx.HTTPError) as error:
+            old_error = str(error) if isinstance(error, BiliError) else '获取音频播放地址请求失败'
+        try:
+            key = _wbi_key(client)
+            return _playurl_json(client, WBI_PLAYURL_API, _sign_wbi({**params, 'fnval': 4048}, key))
+        except (BiliError, httpx.HTTPError, ValueError) as error:
+            _wbi_failed()
+            new_error = str(error) if isinstance(error, BiliError) else 'WBI播放地址请求失败'
+            # HTTP errors may contain cookies or signed URLs; never expose them
+            # in job notices or exception chains consumed by download workers.
+            raise BiliError(f'旧播放接口与WBI备用接口均失败：{old_error}；{new_error}') from None
