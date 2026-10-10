@@ -13,8 +13,11 @@ import httpx
 
 from .config import BILI_HEADERS
 
-PROBE_BYTES = 128 * 1024
-PROBE_SECONDS = 4.0
+PROBE_BYTES = 1024 * 1024
+# The initial MP4 prefix can be hot even when later audio remains very slow.
+# Sample the second MiB instead of choosing a host from only its first 128 KiB.
+PROBE_OFFSET = 1024 * 1024
+PROBE_SECONDS = 6.0
 CACHE_SECONDS = 300.0
 _scores: OrderedDict = OrderedDict()
 _lock = threading.Lock()
@@ -38,19 +41,34 @@ def _probe(url: str) -> float:
     started = time.monotonic()
     received = 0
     try:
-        with httpx.stream(
-            "GET", url, headers={**BILI_HEADERS, "Range": f"bytes=0-{PROBE_BYTES - 1}",
-                                  "Accept-Encoding": "identity"},
-            timeout=httpx.Timeout(2.0), follow_redirects=False,
-        ) as response:
-            # Never consume a whole song if a server ignores the bounded Range.
-            match = re.fullmatch(r"bytes 0-(\d+)/(\d+)", response.headers.get("Content-Range", ""))
-            if response.status_code != 206 or not match or int(match[1]) >= PROBE_BYTES:
-                return 0.0
-            for chunk in response.iter_raw():
-                received += len(chunk)
-                if received >= int(match[1]) + 1 or time.monotonic() - started >= PROBE_SECONDS:
-                    break
+        offset = PROBE_OFFSET
+        for attempt in range(2):
+            with httpx.stream(
+                "GET", url,
+                headers={**BILI_HEADERS, "Range": f"bytes={offset}-{offset + PROBE_BYTES - 1}",
+                         "Accept-Encoding": "identity"},
+                timeout=httpx.Timeout(2.0), follow_redirects=False,
+            ) as response:
+                content_range = response.headers.get("Content-Range", "")
+                short = re.fullmatch(r"bytes \*/(\d+)", content_range)
+                if response.status_code == 416 and attempt == 0 and short and 0 < int(short[1]) <= offset:
+                    # Short songs have no second MiB. One bounded prefix retry
+                    # supports them without treating Range 416 as a dead CDN.
+                    offset = 0
+                    continue
+                # Do not read 200 responses or malformed / oversized ranges.
+                match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", content_range)
+                if (response.status_code != 206 or not match
+                        or int(match[1]) != offset
+                        or not offset <= int(match[2]) < offset + PROBE_BYTES
+                        or int(match[3]) <= int(match[2])):
+                    return 0.0
+                expected = int(match[2]) - offset + 1
+                for chunk in response.iter_raw():
+                    received += len(chunk)
+                    if received >= expected or time.monotonic() - started >= PROBE_SECONDS:
+                        break
+                break
         elapsed = time.monotonic() - started
         return received / max(elapsed, 0.001) if received else 0.0
     except Exception:

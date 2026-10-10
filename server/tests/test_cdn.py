@@ -38,18 +38,52 @@ class CDNSelectionTests(unittest.TestCase):
             self.assertEqual(probe.call_count, 2)
 
     def test_probe_is_range_bounded_and_never_reads_a_200_full_song(self):
-        response = MagicMock(status_code=206, headers={"Content-Range": "bytes 0-131071/10000000"})
-        response.iter_raw.return_value = [b"a" * 65536, b"b" * 65536, b"must-not-be-read"]
+        response = MagicMock(status_code=206, headers={"Content-Range": "bytes 1048576-2097151/10000000"})
+        response.iter_raw.return_value = [b"a" * 524288, b"b" * 524288, b"must-not-be-read"]
         context = MagicMock()
         context.__enter__.return_value = response
         with patch.object(cdn.httpx, "stream", return_value=context) as stream:
             self.assertGreater(cdn._probe(self.urls[0]), 0)
-            self.assertEqual(stream.call_args.kwargs["headers"]["Range"], "bytes=0-131071")
+            self.assertEqual(stream.call_args.kwargs["headers"]["Range"], "bytes=1048576-2097151")
             self.assertEqual(stream.call_args.kwargs["headers"]["Referer"], "https://www.bilibili.com/")
             response.status_code = 200
             response.iter_raw.reset_mock()
             self.assertEqual(cdn._probe(self.urls[0]), 0)
             response.iter_raw.assert_not_called()
+
+    def test_short_file_416_uses_one_bounded_prefix_retry(self):
+        short = MagicMock(status_code=416, headers={"Content-Range": "bytes */65536"})
+        valid = MagicMock(status_code=206, headers={"Content-Range": "bytes 0-65535/65536"})
+        valid.iter_raw.return_value = [b"a" * 65536]
+        first, second = MagicMock(), MagicMock()
+        first.__enter__.return_value = short
+        second.__enter__.return_value = valid
+        with patch.object(cdn.httpx, "stream", side_effect=[first, second]) as stream:
+            self.assertGreater(cdn._probe(self.urls[0]), 0)
+        self.assertEqual(stream.call_count, 2)
+        self.assertEqual(stream.call_args_list[1].kwargs["headers"]["Range"], "bytes=0-1048575")
+        short.iter_raw.assert_not_called()
+
+    def test_mismatched_or_oversized_content_range_is_not_consumed(self):
+        for content_range in ("bytes 0-2097151/3000000", "bytes 1048576-2097152/3000000",
+                              "bytes 1048576-2097151/1048576", "invalid"):
+            with self.subTest(content_range=content_range):
+                response = MagicMock(status_code=206, headers={"Content-Range": content_range})
+                context = MagicMock()
+                context.__enter__.return_value = response
+                with patch.object(cdn.httpx, "stream", return_value=context):
+                    self.assertEqual(cdn._probe(self.urls[0]), 0)
+                response.iter_raw.assert_not_called()
+
+    def test_probe_stops_at_time_budget_even_when_range_arrives_slowly(self):
+        response = MagicMock(status_code=206, headers={"Content-Range": "bytes 1048576-2097151/3000000"})
+        response.iter_raw.return_value = iter([b"a" * 16384, b"must-not-be-read"])
+        context = MagicMock()
+        context.__enter__.return_value = response
+        with (patch.object(cdn.httpx, "stream", return_value=context),
+              patch.object(cdn.time, "monotonic", side_effect=[0, 6.1, 6.1])):
+            self.assertAlmostEqual(cdn._probe(self.urls[0]), 16384 / 6.1)
+        self.assertEqual(next(response.iter_raw.return_value), b"must-not-be-read")
 
     def test_probe_failure_does_not_expose_signed_url(self):
         with patch.object(cdn.httpx, "stream", side_effect=RuntimeError(self.urls[0])):
