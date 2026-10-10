@@ -75,6 +75,9 @@ export default function App() {
               songs={songs}
               serverOk={serverOk}
               onRefresh={async () => {
+                const status = await api.authStatus()
+                setAuth(status)
+                if (!status.authenticated) return
                 const next = await api.songs()
                 setSongs(next)
                 setLoadError('')
