@@ -16,6 +16,8 @@ export interface PlayerState {
   duration: number
   volume: number
   expanded: boolean
+  lyricsVisible: boolean
+  setLyricsVisible: (visible: boolean) => void
   playbackMode: PlaybackMode
   playSong: (song: Song, queue?: Song[]) => void
   toggle: () => void

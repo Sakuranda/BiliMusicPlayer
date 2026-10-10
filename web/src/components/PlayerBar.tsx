@@ -45,6 +45,8 @@ export default function PlayerBar({ onSongSaved }: { onSongSaved?: (song: Song) 
     duration,
     volume,
     expanded,
+    lyricsVisible,
+    setLyricsVisible,
     playbackMode,
     toggle,
     next,
@@ -56,10 +58,6 @@ export default function PlayerBar({ onSongSaved }: { onSongSaved?: (song: Song) 
     queue,
   } = usePlayer()
   const [lyrics, setLyrics] = useState<string | null>(null)
-  const [lyricsVisible, setLyricsVisible] = useState(() => {
-    try { return localStorage.getItem('mp_lyrics_visible') !== 'false' }
-    catch { return true }
-  })
   const lyricBoxRef = useRef<HTMLDivElement>(null)
 
   const currentId = current?.id
@@ -77,13 +75,7 @@ export default function PlayerBar({ onSongSaved }: { onSongSaved?: (song: Song) 
     return () => { alive = false }
   }, [currentId, expanded])
 
-  const toggleLyrics = () => {
-    setLyricsVisible((visible) => {
-      const next = !visible
-      try { localStorage.setItem('mp_lyrics_visible', String(next)) } catch { /* storage unavailable */ }
-      return next
-    })
-  }
+  const toggleLyrics = () => setLyricsVisible(!lyricsVisible)
 
   const lrcLines = useMemo(() => parseLrc(lyrics), [lyrics])
   const plain = useMemo(() => (lyrics && !lrcLines.length ? lrcToPlain(lyrics) : ''), [lyrics, lrcLines])

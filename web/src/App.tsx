@@ -74,7 +74,11 @@ export default function App() {
             <LibraryView
               songs={songs}
               serverOk={serverOk}
-              onRefresh={() => setRefreshKey((k) => k + 1)}
+              onRefresh={async () => {
+                const next = await api.songs()
+                setSongs(next)
+                setLoadError('')
+              }}
               onGoImport={() => setView('import')}
             />
           )}

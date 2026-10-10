@@ -276,6 +276,22 @@ describe('background playback and media session', () => {
     view.unmount()
     expect(document.body.style.overflow).toBe('')
   })
+  it('shares persisted lyric visibility without resetting audio or system controls', () => {
+    const { result } = setup()
+    act(() => result.current.playQueue(songs))
+    const audio = FakeAudio.latest
+    audio.currentTime = 85
+    const source = audio.src
+    const plays = audio.play.mock.calls.length
+    const handler = handlers.nexttrack
+    act(() => result.current.setLyricsVisible(false))
+    expect(result.current.lyricsVisible).toBe(false)
+    expect(localStorage.getItem('mp_lyrics_visible')).toBe('false')
+    expect(audio.currentTime).toBe(85)
+    expect(audio.src).toBe(source)
+    expect(audio.play.mock.calls.length).toBe(plays)
+    expect(handlers.nexttrack).toBe(handler)
+  })
   it('clamps queue indices and seek values and includes explicitly selected songs', () => {
     const { result } = setup()
     act(() => result.current.playQueue(songs, 999))

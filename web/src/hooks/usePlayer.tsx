@@ -52,6 +52,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [duration, setDuration] = useState(0)
   const [volume, setVolumeState] = useState(0.8)
   const [expanded, setExpanded] = useState(false)
+  const [lyricsVisible, setLyricsVisibleState] = useState(() => {
+    try { return localStorage.getItem('mp_lyrics_visible') !== 'false' }
+    catch { return true }
+  })
+  const setLyricsVisible = useCallback((visible: boolean) => {
+    setLyricsVisibleState(visible)
+    try { localStorage.setItem('mp_lyrics_visible', String(visible)) } catch { /* storage unavailable */ }
+  }, [])
   const [playbackMode, setPlaybackModeState] = useState<PlaybackMode>(initialPlaybackMode)
 
   // 创建音频元素并绑定基础事件（只执行一次）
@@ -493,6 +501,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         duration,
         volume,
         expanded,
+        lyricsVisible,
+        setLyricsVisible,
         playbackMode,
         playSong,
         toggle,

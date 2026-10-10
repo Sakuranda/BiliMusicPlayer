@@ -13,6 +13,7 @@ import {
   Play,
   RefreshCw,
   Search,
+  Shuffle,
   Trash2,
   X,
 } from 'lucide-react'
@@ -25,7 +26,7 @@ import type { Playlist, SavedCollection, Song } from '../types'
 interface Props {
   songs: Song[]
   serverOk: boolean | null
-  onRefresh: () => void
+  onRefresh: () => void | Promise<void>
   onGoImport: () => void
 }
 
@@ -359,8 +360,10 @@ function DeleteModal({
 }
 
 export default function LibraryView({ songs, serverOk, onRefresh, onGoImport }: Props) {
-  const { playSong, playQueue, current, playing, setExpanded, updateSongInfo } = usePlayer()
+  const { playSong, playQueue, current, playing, setExpanded, updateSongInfo, setPlaybackMode, lyricsVisible, setLyricsVisible } = usePlayer()
   const [query, setQuery] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshError, setRefreshError] = useState('')
   const [editing, setEditing] = useState<Song | null>(null)
   const [deleting, setDeleting] = useState<Song | null>(null)
   const [playlistTarget, setPlaylistTarget] = useState<Song | null>(null)
@@ -483,10 +486,21 @@ export default function LibraryView({ songs, serverOk, onRefresh, onGoImport }: 
       const items = await api.playlistSongs(selectedPlaylist)
       setPlaylistSongIds(new Set(items.map((song) => song.id)))
     }
-    if (selectedCollection !== 'all' && nextCollections.some((item) => item.id === selectedCollection)) {
-      const items = await api.collectionSongs(selectedCollection)
-      setCollectionSongIds(new Set(items.map((song) => song.id)))
+    if (selectedCollection !== 'all') {
+      if (nextCollections.some((item) => item.id === selectedCollection)) {
+        const items = await api.collectionSongs(selectedCollection)
+        setCollectionSongIds(new Set(items.map((song) => song.id)))
+      } else setSelectedCollection('all')
     }
+  }
+
+  const refreshLibrary = async () => {
+    if (refreshing) return
+    setRefreshing(true)
+    setRefreshError('')
+    try { await Promise.all([onRefresh(), refreshPlaylistContext()]) }
+    catch (error) { setRefreshError(error instanceof Error ? error.message : String(error)) }
+    finally { setRefreshing(false) }
   }
 
   const setLayout = (next: LibraryLayout) => {
@@ -527,11 +541,18 @@ export default function LibraryView({ songs, serverOk, onRefresh, onGoImport }: 
           </button>
         </div>
         <div className="library-toolbar flex flex-col items-stretch gap-3">
-          <div className="inline-flex self-end items-center gap-1 rounded-xl border border-line bg-panel p-1">
+          <div className="flex flex-wrap self-end items-center gap-1 rounded-xl border border-line bg-panel p-1">
+            <button type="button" role="switch" aria-label="显示歌词" aria-checked={lyricsVisible}
+              onClick={() => setLyricsVisible(!lyricsVisible)}
+              className={`inline-flex min-h-11 items-center gap-1 rounded-lg px-2 text-[11px] ${lyricsVisible ? 'bg-panel2 text-ink' : 'text-faint'}`}>
+              <FileText size={13} /> 歌词{lyricsVisible ? '开' : '关'}
+            </button>
+            <span className="mx-1 h-4 w-px bg-line" aria-hidden="true" />
             <span className="pl-2 pr-1 text-[11px] text-muted">封面</span>
             <button
               type="button"
               role="switch"
+              aria-label="显示歌曲封面"
               aria-checked={showCovers}
               onClick={() => setShowCovers(!showCovers)}
               className={`relative h-5 w-9 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 ${
@@ -623,11 +644,12 @@ export default function LibraryView({ songs, serverOk, onRefresh, onGoImport }: 
                 <option key={value} value={value}>{label}</option>
               ))}
             </select>
-            <div className="relative flex-1 sm:flex-none">
+            <div className="relative min-w-40 flex-1 sm:flex-none">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-faint" />
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
+                aria-label="搜索歌曲或歌手"
                 placeholder="搜索歌曲、歌手…"
                 className="w-full sm:w-56 bg-panel border border-line rounded-xl pl-9 pr-3 py-2 text-sm placeholder:text-faint focus:outline-none focus:border-accent/50 transition-colors"
               />
@@ -640,26 +662,30 @@ export default function LibraryView({ songs, serverOk, onRefresh, onGoImport }: 
               <FolderPlus size={15} />
             </button>
             <button
-              onClick={() => {
-                void refreshPlaylistContext()
-                onRefresh()
-              }}
-              title="刷新"
+              onClick={() => void refreshLibrary()}
+              disabled={refreshing}
+              aria-label="刷新曲库"
+              title="刷新曲库"
               className="p-2.5 rounded-xl bg-panel border border-line text-muted hover:text-ink transition-colors"
             >
-              <RefreshCw size={15} />
+              <RefreshCw size={15} className={refreshing ? 'animate-spin' : undefined} />
             </button>
             <button
-              onClick={() => playQueue(filtered)}
+              onClick={() => { setPlaybackMode('repeat'); playQueue(filtered) }}
               disabled={!filtered.length}
               className="flex shrink-0 items-center gap-2 px-4 py-2.5 rounded-xl bg-primary hover:bg-primary/85 text-white text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Play size={15} fill="currentColor" /> 播放全部
             </button>
+            <button onClick={() => { setPlaybackMode('shuffle'); playQueue(filtered) }} disabled={!filtered.length}
+              className="flex min-h-11 shrink-0 items-center gap-2 rounded-xl border border-line bg-panel px-4 text-sm text-muted hover:text-ink disabled:cursor-not-allowed disabled:opacity-40">
+              <Shuffle size={15} /> 随机播放
+            </button>
           </div>
         </div>
       </div>
 
+      {refreshError && <p role="alert" className="mb-4 text-sm text-danger">曲库刷新失败：{refreshError}</p>}
       {serverOk === false && (
         <div className="flex items-center gap-3 bg-danger/10 border border-danger/30 rounded-2xl px-5 py-4 mb-6 text-sm">
           <AlertTriangle size={17} className="text-danger shrink-0" />
@@ -690,7 +716,7 @@ export default function LibraryView({ songs, serverOk, onRefresh, onGoImport }: 
             {artists.filter(name => filtered.some(song => song.artist === name)).map(name => {
               const tracks = filtered.filter(song => song.artist === name)
               return <button key={name} onClick={() => setArtist(name)} className="min-w-0 rounded-2xl border border-line bg-panel p-4 text-left hover:border-accent/50">
-                <div className="mb-3 h-20 w-20 overflow-hidden rounded-xl"><Cover song={tracks[0]} className="h-full w-full" /></div>
+                {showCovers && <div className="mb-3 h-20 w-20 overflow-hidden rounded-xl"><Cover song={tracks[0]} className="h-full w-full" /></div>}
                 <div className="truncate text-sm font-medium">{name}</div><div className="mt-1 text-xs text-muted">{tracks.length} 首</div>
               </button>
             })}
